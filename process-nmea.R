@@ -137,11 +137,11 @@ calc_ave_std_se <- function(df_obj = df, lat = 'lat', lon = 'lon', z = opt$altit
 
 #### Processing ####
 # Character vector of files
-cat("Reading files in selected path")
+cat("\nReading files in selected path\n")
 l <- list.files(path = opt$path, pattern = pattern, recursive = T, full.names = T)
 
 # Extract LLH from GNGGA sentences
-cat("Extracting LLH from GGA sentences")
+cat("\nExtracting LLH from GGA sentences\n")
 df <- lapply(l, function(x) tryCatch(read_llh_from_gngga(x), error=function(e) NULL))
 df <- df[!sapply(df, is.null)] # In case NULL are produced (e.g. no valid points found)
 if(length(df)==0) stop('No valid points were found')
@@ -151,7 +151,7 @@ df <- if(inherits(df, 'list')) df else list(df) # In case of 1-element list (e.g
 df_sum <- lapply(df, calc_ave_std_se)
 
 # Write CSV and KML
-cat("Writing output(s)")
+cat("\nWriting output(s)\n")
 if(opt$processing_type=='all') {
   if(opt$merged) {
     all_merged <- do.call('rbind', df)
