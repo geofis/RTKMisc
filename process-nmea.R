@@ -3,7 +3,7 @@
 # Jose Ramon Martinez Battlle (GH: geofis)
 
 #### Packages ####
-req_pkg <- c("tools","optparse","sf","dplyr","ggplot2")
+req_pkg <- c("tools","optparse","sf","dplyr")
 install_load_pkg <- function(pkg){
   new_pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
   if (length(new_pkg))
@@ -17,8 +17,10 @@ invisible(install_load_pkg(req_pkg))
 option_list = list(
   make_option(c("-p", "--path"), action="store", type='character',
               help="Path to search recursively. Mandatory [default %default]"),
-  make_option(c("-e", "--extension"), action="store", default='ubx', type='character',
-              help="File extension to search [default %default]"),
+  make_option(c("-e", "--extension"), action="store", default=NULL, type='character',
+              help="File extension (without the dot '.') to search. -e and -f are mutually exclusive [default %default]"),
+  make_option(c("-f", "--file_root_name"), action="store", default=NULL, type='character',
+              help="File root name (no metacharacters, e.g. '*') to search. -e and -f are mutually exclusive [default %default]"),
   make_option(c("-s", "--solution_type"), action="store", default="fix", type='character',
               help="Solution type (fix,float) [default %default]"),
   make_option(c("-t", "--processing_type"), action="store", default = 'sum', type='character',
@@ -36,7 +38,19 @@ option_list = list(
 )
 opt <- parse_args(OptionParser(
   option_list=option_list,
-  description = "Creates CSV (default) or KML file(s) from NMEA messages\n\nExample:\nprocess-nmea -p MY/PATH -s fix -t sum -m -k -a alt_msl -n 2.044\n\nGenerates one single KML file of RTK-fix mean coordinates (xyz)\nand statistics for each file containing NMEA messages within\nMY/PATH; z-coord will be mean-sea level height and 2.044 metres\nwill be substracted from z",
+  description = "Creates CSV (default) files, or KML/GPKG files instead optionally, from NMEA messages.
+  
+  Example:
+  ./process-nmea.R -p MY/PATH -e ubx -s fix -t sum -m -k -a alt_msl -n 2.044
+  
+  For each file ending with *.ubx extension containing NMEA
+  messages within `PATH/TO/NMEA/FILES`, the command
+  generates one single KML file in `PATH/TO/NMEA/FILES`,
+  that will have the mean position of RTK-fix coordinates
+  (llh) as well as the standard deviation and standard error.
+  As specified in the command line, the Z-coordinate to use
+  will be mean-sea level height (may use ellipsoidal altitude),
+  and 2.044 metres (the antenna height) will be substracted from Z.",
   epilogue = "Jose Ramon Martinez Batlle (GH: geofis)\n"
   ))
 
@@ -45,10 +59,18 @@ opt <- parse_args(OptionParser(
 # Check if path is NULL 
 if(is.null(opt$path)) stop("A path must be defined")
 
+# Check for metacharacters
+if(grepl('\\*', opt$file_root_name)) stop("No metacharacters (e.g. *) allowed in -f flag")
+
+# Check if both -e and -f are NULL
+if(is.null(opt$extension) & is.null(opt$file_root_name)) stop("Either extension (-e) or file root name (-f) must be defined")
+
+# Check if both -e and -f are not NULL
+if(!is.null(opt$extension) & !is.null(opt$file_root_name)) stop("Either extension (-e) or file root name (-f) must be defined")
+pattern <- if(!is.null(opt$extension)) paste0('*\\.', opt$extension) else opt$file_root_name
 
 #### Recode solution type ####
 opt$solution_type <- switch(opt$solution_type, 'fix' = '4', 'float' = '5', 'both' = c('4', '5'), 'single' = '1')
-
 
 #### Custom functions ####
 # Convert DDMM.MMMMMMMMM to DD.DDDDDDDDD
@@ -105,10 +127,9 @@ calc_ave_std_se <- function(df_obj = df, lat = 'lat', lon = 'lon', z = opt$altit
   return(sf_obj)
 }
 
-
 #### Processing ####
 # Character vector of files
-l <- list.files(path = opt$path, pattern = paste0('*\\.', opt$extension), recursive = T, full.names = T)
+l <- list.files(path = opt$path, pattern = pattern, recursive = T, full.names = T)
 
 # Extract LLH from GNGGA sentences
 df <- lapply(l, function(x) tryCatch(read_llh_from_gngga(x), error=function(e) NULL))
