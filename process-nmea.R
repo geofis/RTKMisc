@@ -5,9 +5,10 @@
 #### Packages ####
 req_pkg <- c("tools","optparse","sf","dplyr")
 install_load_pkg <- function(pkg){
+  if(!dir.exists(Sys.getenv("R_LIBS_USER"))) dir.create(path = Sys.getenv("R_LIBS_USER"), showWarnings = FALSE, recursive = TRUE)
   new_pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
   if (length(new_pkg))
-    install.packages(new_pkg, dependencies = TRUE)
+    install.packages(new_pkg, lib = Sys.getenv("R_LIBS_USER"), dependencies = TRUE, repos = "https://cloud.r-project.org")
   sapply(pkg, function(x) suppressPackageStartupMessages(require(x, character.only = TRUE)))
 }
 invisible(install_load_pkg(req_pkg))
@@ -136,9 +137,11 @@ calc_ave_std_se <- function(df_obj = df, lat = 'lat', lon = 'lon', z = opt$altit
 
 #### Processing ####
 # Character vector of files
+cat("Reading files in selected path")
 l <- list.files(path = opt$path, pattern = pattern, recursive = T, full.names = T)
 
 # Extract LLH from GNGGA sentences
+cat("Extracting LLH from GGA sentences")
 df <- lapply(l, function(x) tryCatch(read_llh_from_gngga(x), error=function(e) NULL))
 df <- df[!sapply(df, is.null)] # In case NULL are produced (e.g. no valid points found)
 if(length(df)==0) stop('No valid points were found')
@@ -148,6 +151,7 @@ df <- if(inherits(df, 'list')) df else list(df) # In case of 1-element list (e.g
 df_sum <- lapply(df, calc_ave_std_se)
 
 # Write CSV and KML
+cat("Writing output(s)")
 if(opt$processing_type=='all') {
   if(opt$merged) {
     all_merged <- do.call('rbind', df)

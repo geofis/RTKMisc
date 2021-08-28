@@ -8,7 +8,7 @@ The R script `process-nmea.R` creates CSV (default) or KML file(s) from NMEA mes
 
 - R (>=3.3.0)
 
-- Packages `tools`, `optparse`, `sf`, `dplyr`. The script checks for the dependencies, so no packages installation is needed before running the script.
+- Packages `tools`, `optparse`, `sf`, `dplyr`. The script checks for the dependencies, so no package installation is needed before running the script. However, it can take tens of minutes (depending on your system) to install the required packages and their dependencies, but this step only runs once.
 
 ## Help
 
