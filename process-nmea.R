@@ -16,41 +16,48 @@ invisible(install_load_pkg(req_pkg))
 #### Make options ####
 option_list = list(
   make_option(c("-p", "--path"), action="store", type='character',
-              help="Path to search recursively. Mandatory [default %default]"),
+              help="Search is recursive. Mandatory [default %default]"),
   make_option(c("-e", "--extension"), action="store", default=NULL, type='character',
-              help="File extension (without the dot '.') to search. -e and -f are mutually exclusive [default %default]"),
+              help="Extension to search for (no dot '.' required).
+                -e and -f are mutually exclusive [default %default]"),
   make_option(c("-f", "--file_root_name"), action="store", default=NULL, type='character',
-              help="File root name (no metacharacters, e.g. '*') to search. -e and -f are mutually exclusive [default %default]"),
+              help="Pattern to search for (no metacharacters allowed, e.g. '*').
+                -e and -f are mutually exclusive [default %default]"),
   make_option(c("-s", "--solution_type"), action="store", default="fix", type='character',
-              help="Solution type (fix,float) [default %default]"),
+              help="fix: only fix solutions are processed
+                float: only float solutions are processed [default %default]"),
   make_option(c("-t", "--processing_type"), action="store", default = 'sum', type='character',
-              help="Processing type. sum:single point,all:all points [default %default]"),
+              help="sum: one point per NMEA file, with mean coordinates and statistics
+                all: all points of each NMEA file saved in separate files as is
+                [default %default]"),
   make_option(c("-m", "--merged"), action="store_true", default = 'FALSE',
-              help="Generate a merged output (in the path) instead of single files? [default %default]"),
+              help="Generate a merged output (in the path) instead of single files?"),
   make_option(c("-k", "--kml"), action="store_true", default = 'FALSE',
-              help="Generate KML files(s) instead of CSV? [default %default]"),
+              help="Generate KML files(s) instead of CSV?"),
   make_option(c("-g", "--gpkg"), action="store_true", default = 'FALSE',
-              help="Generate Geopackage files(s) instead of CSV? [default %default]"),
+              help="Generate Geopackage files(s) instead of CSV?"),
   make_option(c("-a", "--altitude_type"), action="store", default = 'alt_ell', type='character',
-              help="Altitude type for summaries. alt_ell:ellipsoidal altitude,alt_msl:mean-sea level altitude [default %default]"),
+              help="Only for summaries processing type.
+                alt_ell:ellipsoidal altitude
+                alt_msl:mean-sea level altitude [default %default]"),
   make_option(c("-n", "--antenna_height"), action="store", default = 0.0, type='double',
-              help="Antenna height (meters). This value will be sustracted from altitude values [default %default]")
+              help="Value in m to be sustracted from altitude values [default %default]")
 )
 opt <- parse_args(OptionParser(
   option_list=option_list,
   description = "Creates CSV (default) files, or KML/GPKG files instead optionally, from NMEA messages.
   
   Example:
-  ./process-nmea.R -p MY/PATH -e ubx -s fix -t sum -m -k -a alt_msl -n 2.044
+  ./process-nmea.R -p data -e ubx -s fix -t sum -m -k -a alt_msl -n 2.044
   
-  For each file ending with *.ubx extension containing NMEA
-  messages within `PATH/TO/NMEA/FILES`, the command
-  generates one single KML file in `PATH/TO/NMEA/FILES`,
-  that will have the mean position of RTK-fix coordinates
-  (llh) as well as the standard deviation and standard error.
-  As specified in the command line, the Z-coordinate to use
-  will be mean-sea level height (may use ellipsoidal altitude),
-  and 2.044 metres (the antenna height) will be substracted from Z.",
+  This command will generate one single KML file in `data`,
+  summarizing the mean position of RTK-fix coordinates (llh),
+  as well as the standard deviation and standard error,
+  of the points of the files ending with *.ubx extension
+  containing NMEA messages within the directory. As specified
+  in the command line, the Z-coordinate to use will be mean-sea
+  level height (may use ellipsoidal altitude), and 2.044 metres
+  (the antenna height) will be substracted from Z.",
   epilogue = "Jose Ramon Martinez Batlle (GH: geofis)\n"
   ))
 
@@ -60,7 +67,7 @@ opt <- parse_args(OptionParser(
 if(is.null(opt$path)) stop("A path must be defined")
 
 # Check for metacharacters
-if(grepl('\\*', opt$file_root_name)) stop("No metacharacters (e.g. *) allowed in -f flag")
+if(!is.null(opt$file_root_name)) if(grepl('\\*', opt$file_root_name)) stop("No metacharacters (e.g. *) allowed in -f flag")
 
 # Check if both -e and -f are NULL
 if(is.null(opt$extension) & is.null(opt$file_root_name)) stop("Either extension (-e) or file root name (-f) must be defined")
@@ -147,11 +154,11 @@ if(opt$processing_type=='all') {
     if(opt$kml) {
       all_merged %>% 
         st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
-        st_write(dsn = paste0(opt$path, 'all-merged.kml'))
+        st_write(dsn = paste0(opt$path, '/all-merged.kml'))
     } else if(opt$gpkg) {
       all_merged %>% 
         st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
-        st_write(dsn = paste0(opt$path, 'all-merged.gpkg'))
+        st_write(dsn = paste0(opt$path, '/all-merged.gpkg'))
     } else {
       write.csv(x = all_merged, file = paste0(opt$path, '/all-merged.csv', row.names = F))
     }
