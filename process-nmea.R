@@ -1,0 +1,183 @@
+#!/usr/bin/Rscript
+
+# Jose Ramon Martinez Battlle (GH: geofis)
+
+#### Packages ####
+req_pkg <- c("tools","optparse","sf","dplyr","ggplot2")
+install_load_pkg <- function(pkg){
+  new_pkg <- pkg[!(pkg %in% installed.packages()[, "Package"])]
+  if (length(new_pkg))
+    install.packages(new_pkg, dependencies = TRUE)
+  sapply(pkg, function(x) suppressPackageStartupMessages(require(x, character.only = TRUE)))
+}
+invisible(install_load_pkg(req_pkg))
+
+
+#### Make options ####
+option_list = list(
+  make_option(c("-p", "--path"), action="store", type='character',
+              help="Path to search recursively. Mandatory [default %default]"),
+  make_option(c("-e", "--extension"), action="store", default='ubx', type='character',
+              help="File extension to search [default %default]"),
+  make_option(c("-s", "--solution_type"), action="store", default="fix", type='character',
+              help="Solution type (fix,float) [default %default]"),
+  make_option(c("-t", "--processing_type"), action="store", default = 'sum', type='character',
+              help="Processing type. sum:single point,all:all points [default %default]"),
+  make_option(c("-m", "--merged"), action="store_true", default = 'FALSE',
+              help="Generate a merged output (in the path) instead of single files? [default %default]"),
+  make_option(c("-k", "--kml"), action="store_true", default = 'FALSE',
+              help="Generate KML files(s) instead of CSV? [default %default]"),
+  make_option(c("-g", "--gpkg"), action="store_true", default = 'FALSE',
+              help="Generate Geopackage files(s) instead of CSV? [default %default]"),
+  make_option(c("-a", "--altitude_type"), action="store", default = 'alt_ell', type='character',
+              help="Altitude type for summaries. alt_ell:ellipsoidal altitude,alt_msl:mean-sea level altitude [default %default]"),
+  make_option(c("-n", "--antenna_height"), action="store", default = 0.0, type='double',
+              help="Antenna height (meters). This value will be sustracted from altitude values [default %default]")
+)
+opt <- parse_args(OptionParser(
+  option_list=option_list,
+  description = "Creates CSV (default) or KML file(s) from NMEA messages\n\nExample:\nprocess-nmea -p MY/PATH -s fix -t sum -m -k -a alt_msl -n 2.044\n\nGenerates one single KML file of RTK-fix mean coordinates (xyz)\nand statistics for each file containing NMEA messages within\nMY/PATH; z-coord will be mean-sea level height and 2.044 metres\nwill be substracted from z",
+  epilogue = "Jose Ramon Martinez Batlle (GH: geofis)\n"
+  ))
+
+
+#### Check arguments ####
+# Check if path is NULL 
+if(is.null(opt$path)) stop("A path must be defined")
+
+
+#### Recode solution type ####
+opt$solution_type <- switch(opt$solution_type, 'fix' = '4', 'float' = '5', 'both' = c('4', '5'), 'single' = '1')
+
+
+#### Custom functions ####
+# Convert DDMM.MMMMMMMMM to DD.DDDDDDDDD
+to_dd <- function(nmea) {
+  dd <- as.vector(sapply(nmea, function(x) {
+    raw <- as.numeric(strsplit(gsub('([0-9]*)([0-9]{2})\\.([0-9]*)', '\\1,\\2,0.\\3', x), ',')[[1]])
+    dd <- round(as.integer(raw[1]) + (raw[2] + raw[3])/60L, 9)
+    return(dd)
+  }))
+  return(dd)
+}
+
+# Extract LLH from GNGGA sentences
+read_llh_from_gngga <- function(x, sol_type = opt$solution_type, ant_hgt=opt$antenna_height) {
+  nmea_mes <- readLines(x, skipNul=T, warn=F)
+  gngga <- gsub('(.*)(\\$GNGGA.*\\*.{2}$)(.*)', '\\2', grep('GNGGA', nmea_mes, value=T, useBytes=T))
+  gngga_df <- data.frame(do.call('rbind', lapply(gngga, function(x) t(data.frame(unlist(strsplit(x, split=','))[c(3:7, 10, 12)])))), stringsAsFactors = F)
+  colnames(gngga_df) <- c('lat', 'lat_dir', 'lon', 'lon_dir', 'sol_type', 'alt_msl', 'geoid_hgt')
+  rownames(gngga_df) <- NULL
+  gngga_df <- gngga_df[gngga_df[,5] %in% sol_type, ]
+  gngga_df[,c('lat', 'lon')] <- lapply(gngga_df[,c('lat', 'lon')], function(x) to_dd(x))
+  gngga_df[,c('alt_msl', 'geoid_hgt')] <- lapply(gngga_df[, c('alt_msl', 'geoid_hgt')], function(x) as.numeric(x))
+  gngga_df[, 'lat'] <- ifelse(gngga_df[, 'lat_dir']=='N', as.numeric(gngga_df[, 'lat'], 0-as.numeric(gngga_df[, 'lat'])))
+  gngga_df[, 'lon'] <- ifelse(gngga_df[, 'lon_dir']=='W', 0-as.numeric(gngga_df[, 'lon'], as.numeric(gngga_df[, 'lon'])))
+  gngga_df[, 'alt_ell'] <- gngga_df[, 'alt_msl'] + gngga_df[, 'geoid_hgt']
+  gngga_df[, 'filename'] <- x
+  gngga_df <- gngga_df[, c('filename', 'lat', 'lon', 'alt_ell', 'alt_msl', 'geoid_hgt')]
+  gngga_df[,c('alt_ell', 'alt_msl')] <- gngga_df[,c('alt_ell', 'alt_msl')] - ant_hgt
+  return(gngga_df)
+}
+
+# Generate sf object from df
+calc_ave_std_se <- function(df_obj = df, lat = 'lat', lon = 'lon', z = opt$altitude_type,
+                            target_crs_epsg = 32619, id_col = 'filename') {
+  sf_obj <-  df_obj %>%
+    st_as_sf(coords = c(lon, lat), crs = 4326, remove = FALSE) %>%
+    st_transform(crs = target_crs_epsg) %>% 
+    mutate(x = st_coordinates(geometry)[,1],
+           y = st_coordinates(geometry)[,2],
+           z = !!sym(z)) %>% 
+    st_drop_geometry() %>% 
+    group_by(!!sym(id_col)) %>%
+    mutate(N = n(),
+           std_x = sd(x),
+           std_y = sd(y),
+           std_z = sd(z),
+           se_x = sd(x) / sqrt(N),
+           se_y = sd(y) / sqrt(N),
+           se_z = sd(z) / sqrt(N)) %>%
+    group_by(!!sym(id_col), N, std_x, std_y, std_z, se_x, se_y, se_z) %>%
+    summarise_at(vars(lat, lon, x, y, z), mean) %>% 
+    mutate_at(vars(lat, lon), round, 9) %>% 
+    mutate_at(vars(-one_of(id_col, lat, lon)), round, 4)
+  return(sf_obj)
+}
+
+
+#### Processing ####
+# Character vector of files
+l <- list.files(path = opt$path, pattern = paste0('*\\.', opt$extension), recursive = T, full.names = T)
+
+# Extract LLH from GNGGA sentences
+df <- lapply(l, function(x) tryCatch(read_llh_from_gngga(x), error=function(e) NULL))
+df <- df[!sapply(df, is.null)] # In case NULL are produced (e.g. no valid points found)
+if(length(df)==0) stop('No valid points were found')
+df <- if(inherits(df, 'list')) df else list(df) # In case of 1-element list (e.g. only one single file contains valid point)
+
+# Calculate summaries: mean, standard deviation and standard error
+df_sum <- lapply(df, calc_ave_std_se)
+
+# Write CSV and KML
+if(opt$processing_type=='all') {
+  if(opt$merged) {
+    all_merged <- do.call('rbind', df)
+    if(opt$kml) {
+      all_merged %>% 
+        st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+        st_write(dsn = paste0(opt$path, 'all-merged.kml'))
+    } else if(opt$gpkg) {
+      all_merged %>% 
+        st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+        st_write(dsn = paste0(opt$path, 'all-merged.gpkg'))
+    } else {
+      write.csv(x = all_merged, file = paste0(opt$path, '/all-merged.csv', row.names = F))
+    }
+  } else {
+    if(opt$kml) {
+      invisible(lapply(df, function(x) x %>%
+                         st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+                         st_write(dsn = paste0(file_path_sans_ext(unique(x$filename)), '-', opt$processing_type, '.kml'))
+      ))
+    } else if(opt$gpkg) {
+      invisible(lapply(df, function(x) x %>%
+                         st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+                         st_write(dsn = paste0(file_path_sans_ext(unique(x$filename)), '-', opt$processing_type, '.gpkg'))
+      ))
+    } else {
+      invisible(lapply(df, function(x) write.csv(x = x, file = paste0(file_path_sans_ext(unique(x$filename)), '-', opt$processing_type, '.csv'), row.names = F)))
+    }
+  }
+} else if(opt$processing_type=='sum') {
+  if(opt$merged) {
+    sum_merged <- do.call('rbind', df_sum)
+    if(opt$kml) {
+      sum_merged %>% 
+        st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+        st_write(dsn = paste0(opt$path, '/summary-merged.kml'))
+    } else if(opt$gpkg) {
+      sum_merged %>% 
+        st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+        st_write(dsn = paste0(opt$path, '/summary-merged.gpkg'))
+    } else {
+      write.csv(x = sum_merged, file = paste0(opt$path, '/summary-merged.csv', row.names = F))
+    }
+  } else {
+    if(opt$kml) {
+      invisible(lapply(df_sum, function(x) x %>%
+                         st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+                         st_write(dsn = paste0(file_path_sans_ext(unique(x$filename)), '-', opt$processing_type, '.kml'))
+      ))
+    } else if(opt$gpkg) {
+      invisible(lapply(df_sum, function(x) x %>%
+                         st_as_sf(coords = c('lon', 'lat'), crs = 4326, remove = FALSE) %>% 
+                         st_write(dsn = paste0(file_path_sans_ext(unique(x$filename)), '-', opt$processing_type, '.gpkg'))
+      ))
+    } else {
+      invisible(lapply(df_sum, function(x) write.csv(x = x, file = paste0(file_path_sans_ext(unique(x$filename)), '-', opt$processing_type, '.csv'), row.names = F)))
+    }
+  }
+} else {
+  cat('\nInvalid processing type flag\n\n')
+}
