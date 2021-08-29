@@ -79,3 +79,19 @@ Jose Ramon Martinez Batlle (GH: geofis)
 
 
 Hint: add the script to the `$PATH`--or set an alias--to call it from anywhere in your PC.
+
+## Docker
+
+Install [Docker](https://docs.docker.com/get-docker/) and clone this repo. Run the following commands.
+
+```
+docker build -t process-nmea . # This may take a while the first time you run it.
+docker run -it --rm \
+  -v "$(pwd):/data"\
+  --user $(id -u):$(id -g)\
+  process-nmea -e ubx -s fix -t sum -m -k -a alt_msl -n 2.044
+
+# Substitute "$(pwd)" for a diferent path. For example "/home/user/my_nmea_files". The only restriction is that it must be an absolute path.
+```
+
+Be sure to prune regularly your containers.
